@@ -80,7 +80,7 @@ h1{font-size:28px;font-weight:300;letter-spacing:.05em;margin-bottom:4px}
 const TOPIC = 'vibeambient-aarushj2023';
 let on=false, mr=null, loopTimer=null, stream=null;
 
-function st(l1,l2,pulse){
+function s(l1,l2,pulse){
   document.getElementById('sl1').textContent=l1;
   document.getElementById('sl2').textContent=l2||'';
   document.getElementById('dot').classList.toggle('p',!!pulse);
@@ -90,27 +90,26 @@ async function sv(vibe, btn) {
   document.querySelectorAll('.vb').forEach(b=>b.classList.remove('on'));
   if(btn) btn.classList.add('on');
   try {
-    const r = await fetch('https://ntfy.sh/'+TOPIC, {method:'POST', body:vibe});
-    if(r.ok) { st('Sent: '+vibe,'TV will update in ~10 seconds',false); }
-    else { st('Error sending','Try again',false); }
-  } catch(e) { st('Network error','Check internet connection',false); }
+    await fetch('https://ntfy.sh/'+TOPIC, {method:'POST', body:vibe});
+    s('Sent: '+vibe,'TV updates in ~10 seconds',false);
+  } catch(e) { s('Network error','Check internet',false); }
 }
 
 async function toggle() {
-  if(on) { stopListen(); } else { await startListen(); }
+  if(on) stopListen(); else await startListen();
 }
 
 async function startListen() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    stream = await navigator.mediaDevices.getUserMedia({audio:true, video:false});
   } catch(e) {
-    st('Mic access denied','Allow mic in Safari Settings → VibeAmbient',false);
+    s('Mic denied','Allow mic in iPhone Settings → Safari',false);
     return;
   }
   on=true;
   document.getElementById('mb').textContent='Stop Listening';
   document.getElementById('mb').classList.add('rec');
-  st('Listening to room\u2026','Recording 10 seconds\u2026',true);
+  s('Listening…','Recording 10 seconds…',true);
   recordLoop();
 }
 
@@ -118,92 +117,102 @@ function stopListen() {
   on=false;
   clearTimeout(loopTimer);
   if(mr && mr.state!=='inactive') mr.stop();
-  if(stream) { stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
   document.getElementById('mb').textContent='Start Listening';
   document.getElementById('mb').classList.remove('rec');
-  st('Stopped','',false);
+  s('Stopped','',false);
 }
 
 async function recordLoop() {
   if(!on) return;
   const chunks=[];
-  const mimeType = MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : 'audio/webm';
-  mr = new MediaRecorder(stream, {mimeType});
-  mr.ondataavailable = e => { if(e.data.size>0) chunks.push(e.data); };
-  await new Promise(res => { mr.onstop=res; mr.start(); setTimeout(()=>mr.stop(),10000); });
+  let mimeType='';
+  const formats=['audio/mp4','audio/aac','audio/webm;codecs=opus','audio/webm'];
+  for(const f of formats){ if(MediaRecorder.isTypeSupported(f)){ mimeType=f; break; } }
+
+  mr = new MediaRecorder(stream, mimeType?{mimeType}:{});
+  mr.ondataavailable = e=>{ if(e.data.size>0) chunks.push(e.data); };
+  await new Promise(res=>{
+    mr.onstop=res; mr.start(1000);
+    setTimeout(()=>{ if(mr.state!=='inactive') mr.stop(); }, 10000);
+  });
   if(!on) return;
-  st('Identifying song\u2026','Sending to ACRCloud\u2026',true);
-  const blob = new Blob(chunks, {type:mimeType});
+
+  const blob = new Blob(chunks, {type:mimeType||'audio/mp4'});
+  s('Identifying…','Sending '+Math.round(blob.size/1024)+'KB to ACRCloud…',true);
+
   const vibe = await identify(blob);
-  if(vibe) {
-    await sv(vibe, null);
-  } else {
-    st('No match found','Trying again in 20 seconds\u2026',false);
-  }
-  if(on) loopTimer = setTimeout(recordLoop, 20000);
+  if(vibe) await sv(vibe, null);
+  else s('No match','Trying again in 20s…',false);
+  if(on) loopTimer=setTimeout(recordLoop,20000);
 }
 
 async function identify(blob) {
-  const host   = document.getElementById('ah').value.trim();
-  const key    = document.getElementById('ak').value.trim();
-  const secret = document.getElementById('as').value.trim();
-  const lfKey  = document.getElementById('lk').value.trim();
-  if(!host||!key||!secret) return null;
-  const ts  = Math.floor(Date.now()/1000);
-  const str = 'POST\n/v1/identify\n'+key+'\naudio\n1\n'+ts;
-  const sig = await hmac(secret, str);
-  const fd  = new FormData();
-  fd.append('access_key',key);
+  const host  = document.getElementById('ah').value.trim();
+  const key   = document.getElementById('ak').value.trim();
+  const sec   = document.getElementById('as').value.trim();
+  const lfk   = document.getElementById('lk').value.trim();
+  if(!host||!key||!sec) return null;
+
+  const ts     = Math.floor(Date.now()/1000);
+  const sigStr = ['POST','/v1/identify',key,'audio','1',ts].join('\n');
+  const sig    = await hmac(sec, sigStr);
+
+  const fd = new FormData();
+  fd.append('access_key', key);
   fd.append('sample', blob, 'audio.mp4');
   fd.append('sample_bytes', blob.size.toString());
   fd.append('timestamp', ''+ts);
   fd.append('signature', sig);
-  fd.append('signature_version','1');
-  fd.append('data_type','audio');
+  fd.append('signature_version', '1');
+  fd.append('data_type', 'audio');
+
+  // Use corsproxy.io to bypass CORS restriction
+  const acrUrl = 'https://'+host+'/v1/identify';
+  const proxyUrl = 'https://corsproxy.io/?'+encodeURIComponent(acrUrl);
+
   try {
-    const r    = await fetch('https://'+host+'/v1/identify',{method:'POST',body:fd});
-    const data = await r.json();
-    if(data?.status?.code!==0) return null;
-    const music  = data?.metadata?.music?.[0];
-    if(!music) return null;
-    const title  = music.title||'';
-    const artist = music.artists?.[0]?.name||'';
-    const bpm    = parseFloat(music.tempo?.value||'0');
-    st('\u266a '+title, artist, false);
-    if(lfKey && title && artist) {
-      const tags = await lfmTags(artist, title, lfKey);
+    const r = await fetch(proxyUrl, {method:'POST', body:fd});
+    const d = await r.json();
+    s('ACRCloud: '+d?.status?.code, d?.status?.msg||'', false);
+    if(d?.status?.code!==0) return null;
+    const m = d?.metadata?.music?.[0];
+    if(!m) return null;
+    const title  = m.title||'';
+    const artist = m.artists?.[0]?.name||'';
+    const bpm    = parseFloat(m.tempo?.value||'0');
+    s('♪ '+title, artist, false);
+    if(lfk && title && artist) {
+      const tags = await lfmTags(artist, title, lfk);
       const v    = classifyTags(tags);
       if(v) return v;
     }
     return bpm>128?'PARTY':bpm<90?'CHILL':'FOCUS';
-  } catch(e) { return null; }
+  } catch(e) { s('Error: '+e.message,'',false); return null; }
 }
 
 async function lfmTags(artist, title, key) {
-  const url = 'https://ws.audioscrobbler.com/2.0/?method=track.getInfo'
-            + '&api_key='+key+'&artist='+encodeURIComponent(artist)
-            + '&track='+encodeURIComponent(title)+'&format=json';
+  const url = 'https://ws.audioscrobbler.com/2.0/?method=track.getInfo&api_key='+key
+            + '&artist='+encodeURIComponent(artist)+'&track='+encodeURIComponent(title)+'&format=json';
   try {
-    const r    = await fetch(url);
-    const data = await r.json();
-    return (data?.track?.toptags?.tag||[]).map(t=>t.name.toLowerCase());
-  } catch(e) { return []; }
+    const r=await fetch(url); const d=await r.json();
+    return (d?.track?.toptags?.tag||[]).map(t=>t.name.toLowerCase());
+  } catch(e){ return[]; }
 }
 
-function classifyTags(tags) {
-  if(tags.some(t=>['party','dance','edm','club','disco','electronic','house','techno','trance'].includes(t))) return 'PARTY';
-  if(tags.some(t=>['chill','ambient','relax','mellow','lo-fi','lofi','calm','peaceful','sleep'].includes(t))) return 'CHILL';
-  if(tags.some(t=>['dark','metal','heavy','gothic','industrial','doom','grunge','punk'].includes(t))) return 'DARK';
-  if(tags.some(t=>['romantic','love','soul','r&b','rnb','ballad','jazz'].includes(t))) return 'ROMANTIC';
-  if(tags.some(t=>['focus','study','classical','instrumental','piano'].includes(t))) return 'FOCUS';
+function classifyTags(tags){
+  if(tags.some(t=>['party','dance','edm','club','disco','electronic','house','techno','trance'].includes(t))) return'PARTY';
+  if(tags.some(t=>['chill','ambient','relax','mellow','lo-fi','lofi','calm','peaceful','sleep'].includes(t))) return'CHILL';
+  if(tags.some(t=>['dark','metal','heavy','gothic','industrial','doom','grunge','punk'].includes(t))) return'DARK';
+  if(tags.some(t=>['romantic','love','soul','r&b','rnb','ballad','jazz'].includes(t))) return'ROMANTIC';
+  if(tags.some(t=>['focus','study','classical','instrumental','piano'].includes(t))) return'FOCUS';
   return null;
 }
 
 async function hmac(secret, message) {
   const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey('raw', enc.encode(secret),
-              {name:'HMAC',hash:'SHA-1'}, false, ['sign']);
-  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+  const key = await crypto.subtle.importKey('raw',enc.encode(secret),{name:'HMAC',hash:'SHA-1'},false,['sign']);
+  const sig = await crypto.subtle.sign('HMAC',key,enc.encode(message));
   return btoa(String.fromCharCode(...new Uint8Array(sig)));
 }
 </script>
