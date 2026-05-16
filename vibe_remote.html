@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>VibeAmbient Remote</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body {
+    background:#050c1c; color:#fff; font-family:-apple-system,sans-serif;
+    min-height:100vh; display:flex; flex-direction:column; align-items:center;
+    padding:40px 24px 60px;
+  }
+  h1 { font-size:28px; font-weight:300; letter-spacing:0.05em; margin-bottom:6px; }
+  .sub { font-size:14px; color:#6688aa; margin-bottom:40px; }
+
+  .tv-input { width:100%; margin-bottom:14px; }
+  .tv-input label { display:block; font-size:11px; color:#88aabb; letter-spacing:0.1em; margin-bottom:6px; }
+  .tv-input input {
+    width:100%; height:48px; background:#0d1e30; border:1px solid #1a3a5c;
+    border-radius:10px; color:#fff; font-size:15px; padding:0 16px;
+    outline:none; -webkit-appearance:none;
+  }
+
+  .btn-main {
+    width:100%; height:64px; border-radius:16px; border:none;
+    font-size:18px; font-weight:500; letter-spacing:0.03em;
+    background:#1a4a7a; color:#fff; margin-top:8px; cursor:pointer;
+    transition:opacity .15s;
+  }
+  .btn-main:active { opacity:0.7; }
+  .btn-main.recording { background:#8b1a1a; }
+  .btn-main.sending   { background:#1a5a3a; }
+
+  .status-box {
+    width:100%; background:#0d1e30; border-radius:14px;
+    padding:20px; margin-top:24px; min-height:80px;
+    display:flex; align-items:center; gap:14px;
+  }
+  .dot { width:10px; height:10px; border-radius:50%; background:#fff; flex-shrink:0; }
+  .dot.pulse { animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:.2} 50%{opacity:1} }
+  .status-text { flex:1; }
+  .status-line1 { font-size:16px; font-weight:300; }
+  .status-line2 { font-size:12px; color:#6688aa; margin-top:4px; }
+
+  .vibes { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:24px; width:100%; }
+  .vibe-btn {
+    height:52px; border-radius:12px; border:1px solid #1a3a5c;
+    background:#0d1e30; color:#aaccee; font-size:14px; cursor:pointer;
+    transition:all .15s;
+  }
+  .vibe-btn:active, .vibe-btn.active { background:#1a4a7a; border-color:#4488cc; color:#fff; }
+
+  .divider { width:100%; text-align:center; color:#334455; font-size:12px; margin:20px 0 4px; }
+</style>
+</head>
+<body>
+
+<h1>VibeAmbient</h1>
+<p class="sub">iPhone remote for your TCL TV</p>
+
+<div class="tv-input">
+  <label>TV IP ADDRESS</label>
+  <input id="tvIp" type="text" placeholder="192.168.29.200" value="192.168.29.200"
+         inputmode="decimal" autocomplete="off" autocorrect="off" spellcheck="false"/>
+</div>
+
+<div class="tv-input">
+  <label>ACRCLOUD HOST</label>
+  <input id="acrHost" type="text" placeholder="identify-ap-southeast-1.acrcloud.com"
+         value="identify-ap-southeast-1.acrcloud.com"
+         autocomplete="off" autocorrect="off" spellcheck="false"/>
+</div>
+<div class="tv-input">
+  <label>ACRCLOUD ACCESS KEY</label>
+  <input id="acrKey" type="text" placeholder="Your Access Key"
+         value="c413c6dd191dae1da3535505aa0c8d0d"
+         autocomplete="off" autocorrect="off" spellcheck="false"/>
+</div>
+<div class="tv-input">
+  <label>ACRCLOUD ACCESS SECRET</label>
+  <input id="acrSecret" type="password" placeholder="Your Access Secret"
+         value="Jcl6G4Be6umu2T36vYlbUNKlRgFOpiSyGu1prxko"
+         autocomplete="off"/>
+</div>
+<div class="tv-input">
+  <label>LAST.FM API KEY</label>
+  <input id="lastfmKey" type="text" placeholder="Your Last.fm API Key"
+         value="a1ccef7f229adbdb11f796074bca715f"
+         autocomplete="off" autocorrect="off" spellcheck="false"/>
+</div>
+
+<button class="btn-main" id="mainBtn" onclick="toggleListen()">
+  Start Listening
+</button>
+
+<div class="status-box">
+  <div class="dot" id="dot"></div>
+  <div class="status-text">
+    <div class="status-line1" id="sl1">Ready — tap Start to begin</div>
+    <div class="status-line2" id="sl2"></div>
+  </div>
+</div>
+
+<div class="divider">or set vibe manually</div>
+
+<div class="vibes">
+  <button class="vibe-btn" onclick="sendVibe('CHILL')">Chill</button>
+  <button class="vibe-btn" onclick="sendVibe('PARTY')">Party</button>
+  <button class="vibe-btn" onclick="sendVibe('FOCUS')">Focus</button>
+  <button class="vibe-btn" onclick="sendVibe('ROMANTIC')">Romantic</button>
+  <button class="vibe-btn" onclick="sendVibe('DARK')">Dark</button>
+  <button class="vibe-btn" onclick="sendVibe('UNKNOWN')">Reset</button>
+</div>
+
+<script>
+let listening = false;
+let mediaRecorder = null;
+let loopTimer = null;
+let stream = null;
+
+function status(l1, l2, pulse) {
+  document.getElementById('sl1').textContent = l1;
+  document.getElementById('sl2').textContent = l2 || '';
+  const dot = document.getElementById('dot');
+  dot.classList.toggle('pulse', !!pulse);
+}
+
+function tvUrl() {
+  const ip = document.getElementById('tvIp').value.trim();
+  return `http://${ip}:5678`;
+}
+
+async function sendVibe(vibe) {
+  const url = tvUrl() + `/vibe?v=${vibe}`;
+  try {
+    await fetch(url, { mode:'no-cors' });
+    status(`Sent: ${vibe}`, 'TV updated', false);
+    document.querySelectorAll('.vibe-btn').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+  } catch(e) {
+    status('Could not reach TV', 'Check IP address and same WiFi', false);
+  }
+}
+
+async function toggleListen() {
+  if (listening) {
+    stopListening();
+  } else {
+    await startListening();
+  }
+}
+
+async function startListening() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+  } catch(e) {
+    status('Mic access denied', 'Allow microphone in Safari settings', false);
+    return;
+  }
+  listening = true;
+  const btn = document.getElementById('mainBtn');
+  btn.textContent = 'Stop Listening';
+  btn.classList.add('recording');
+  status('Listening to room…', 'Recording 10 seconds…', true);
+  recordAndDetect();
+}
+
+function stopListening() {
+  listening = false;
+  clearTimeout(loopTimer);
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  const btn = document.getElementById('mainBtn');
+  btn.textContent = 'Start Listening';
+  btn.classList.remove('recording','sending');
+  status('Stopped', '', false);
+}
+
+async function recordAndDetect() {
+  if (!listening) return;
+
+  // Record 10 seconds
+  const chunks = [];
+  mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+  mediaRecorder.ondataavailable = e => { if(e.data.size > 0) chunks.push(e.data); };
+
+  await new Promise(res => {
+    mediaRecorder.onstop = res;
+    mediaRecorder.start();
+    setTimeout(() => mediaRecorder.stop(), 10000);
+  });
+
+  if (!listening) return;
+
+  status('Identifying song…', 'Sending to ACRCloud…', true);
+
+  const blob = new Blob(chunks, { type:'audio/webm' });
+  const vibe = await identify(blob);
+
+  if (!listening) return;
+
+  if (vibe) {
+    await sendVibe(vibe);
+    status(`Vibe: ${vibe}`, 'TV updated! Next check in 20s…', false);
+  } else {
+    status('No match found', 'Trying again in 20s…', false);
+  }
+
+  // Wait 20 seconds then repeat
+  loopTimer = setTimeout(recordAndDetect, 20000);
+}
+
+async function identify(audioBlob) {
+  const host    = document.getElementById('acrHost').value.trim();
+  const key     = document.getElementById('acrKey').value.trim();
+  const secret  = document.getElementById('acrSecret').value.trim();
+  const lfmKey  = document.getElementById('lastfmKey').value.trim();
+
+  if (!host || !key || !secret) return null;
+
+  const ts  = Math.floor(Date.now() / 1000);
+  const str = `POST\n/v1/identify\n${key}\naudio\n1\n${ts}`;
+  const sig = await hmacSha1(secret, str);
+
+  const form = new FormData();
+  form.append('access_key', key);
+  form.append('sample',     audioBlob, 'audio.webm');
+  form.append('sample_bytes', audioBlob.size.toString());
+  form.append('timestamp',  ts.toString());
+  form.append('signature',  sig);
+  form.append('signature_version', '1');
+  form.append('data_type',  'audio');
+
+  try {
+    const r    = await fetch(`https://${host}/v1/identify`, { method:'POST', body:form });
+    const data = await r.json();
+    if (data?.status?.code !== 0) return null;
+
+    const music  = data?.metadata?.music?.[0];
+    if (!music) return null;
+
+    const title  = music.title;
+    const artist = music.artists?.[0]?.name || '';
+    const bpm    = parseFloat(music.tempo?.value || '0');
+
+    // Get Last.fm tags for vibe
+    if (lfmKey && title && artist) {
+      const tags = await getLastFmTags(artist, title, lfmKey);
+      const vibe = classifyFromTags(tags);
+      if (vibe) {
+        status(`♪ ${title}`, `${artist} • ${vibe}`, false);
+        return vibe;
+      }
+    }
+    return classifyFromBpm(bpm);
+  } catch(e) {
+    return null;
+  }
+}
+
+async function getLastFmTags(artist, title, key) {
+  const a = encodeURIComponent(artist);
+  const t = encodeURIComponent(title);
+  const url = `https://ws.audioscrobbler.com/2.0/?method=track.getInfo&api_key=${key}&artist=${a}&track=${t}&format=json`;
+  try {
+    const r    = await fetch(url);
+    const data = await r.json();
+    return (data?.track?.toptags?.tag || []).map(t => t.name.toLowerCase());
+  } catch(e) { return []; }
+}
+
+function classifyFromTags(tags) {
+  const PARTY    = ['party','dance','edm','club','disco','rave','electronic','house','techno','trance','funk'];
+  const CHILL    = ['chill','ambient','relax','mellow','lo-fi','lofi','calm','peaceful','sleep','chillout','downtempo'];
+  const DARK     = ['dark','metal','heavy','gothic','industrial','doom','grunge','punk','hardcore'];
+  const ROMANTIC = ['romantic','love','soul','r&b','rnb','ballad','jazz','bossa nova'];
+  const FOCUS    = ['focus','study','classical','instrumental','piano','orchestra','soundtrack'];
+
+  if (tags.some(t => PARTY.includes(t)))    return 'PARTY';
+  if (tags.some(t => CHILL.includes(t)))    return 'CHILL';
+  if (tags.some(t => DARK.includes(t)))     return 'DARK';
+  if (tags.some(t => ROMANTIC.includes(t))) return 'ROMANTIC';
+  if (tags.some(t => FOCUS.includes(t)))    return 'FOCUS';
+  return null;
+}
+
+function classifyFromBpm(bpm) {
+  if (bpm > 128) return 'PARTY';
+  if (bpm < 90)  return 'CHILL';
+  return 'FOCUS';
+}
+
+async function hmacSha1(secret, message) {
+  const enc  = new TextEncoder();
+  const key  = await crypto.subtle.importKey(
+    'raw', enc.encode(secret), { name:'HMAC', hash:'SHA-1' }, false, ['sign']
+  );
+  const sig  = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+  return btoa(String.fromCharCode(...new Uint8Array(sig)));
+}
+</script>
+</body>
+</html>
